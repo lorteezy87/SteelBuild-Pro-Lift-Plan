@@ -164,7 +164,10 @@ export function createApp(db: Db, options: AppOptions) {
         } catch {
           /* malformed origin is refused below */
         }
-        if (host !== c.req.header("host")) return fail(c, 403, "BAD_ORIGIN", "Cross-site request refused.");
+        // Behind a reverse proxy the public host arrives in X-Forwarded-Host. A browser cannot set
+        // that header on a cross-site request, so accepting it does not weaken the check.
+        const own = [c.req.header("host"), c.req.header("x-forwarded-host")];
+        if (host === "" || !own.includes(host)) return fail(c, 403, "BAD_ORIGIN", "Cross-site request refused.");
       }
     }
     await next();

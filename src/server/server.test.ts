@@ -76,6 +76,7 @@ describe("accounts", () => {
     expect(res.status).toBe(403);
     const pat = await register("Pat");
     expect((await call(pat, "POST", "/api/plans", { plan: emptyPlan() }, { origin: "https://evil.example", host: "localhost" })).status).toBe(403);
+    expect((await call(pat, "POST", "/api/plans", { plan: emptyPlan() }, { origin: "https://app.example", host: "localhost", "x-forwarded-host": "app.example" })).status).toBe(200);
   });
 
   it("locks sign-in after repeated failures", async () => {
