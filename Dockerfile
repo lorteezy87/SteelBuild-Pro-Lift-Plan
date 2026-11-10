@@ -10,6 +10,5 @@ WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data PORT=8787
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
-VOLUME /data
 EXPOSE 8787
 CMD ["node", "dist-server/server.js"]

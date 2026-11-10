@@ -68,7 +68,7 @@ SIGNUP_CODE=choose-a-code DATA_DIR=/var/lib/lift-plan npm start
 - `PORT` — defaults to 8787.
 - Serve it over HTTPS; session cookies are marked Secure unless `INSECURE_COOKIES=1`.
 
-A `Dockerfile` is included; mount a volume at `/data`.
+A `Dockerfile` is included; mount a volume at `/data`. It declares no `VOLUME` because some hosts, Railway among them, refuse Dockerfiles that do.
 
 ## Layout
 
