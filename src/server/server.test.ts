@@ -47,6 +47,7 @@ function goodPlan() {
   p.name = "L-001";
   p.load = { massKg: 10_000, evidence: "calculated", uncertaintyRel: 0.03 };
   p.crane = { boomLengthM: 18, radiusM: 8, radiusAllowanceM: 0, partsOfLine: 4, singleLinePullKg: 5000 };
+  p.deductions = [{ id: "hb", label: "Hook block", massKg: 450 }];
   p.rigging.enabled = false;
   p.ground = { reactionN: 400_000, reactionSource: "OEM table", matMassKg: 900, matLengthM: 2, matWidthM: 2, fullAreaAttested: true, allowableBearingPa: 150_000, allowableSource: "Geotech G-4" };
   p.wind = { gustMs: 6, source: "measured" };
@@ -194,5 +195,31 @@ describe("FT-24 audit log", () => {
     expect(log.json.entries.length).toBeGreaterThanOrEqual(2);
     db.prepare("UPDATE audit SET detail = ? WHERE seq = 1").run('{"name":"Mallory"}');
     expect(verifyAudit(db)).toBe(1);
+  });
+});
+
+describe("steel models", () => {
+  it("stores a valid model for everyone signed in and rejects a broken one", async () => {
+    const { sampleModel } = await import("../kernel/site");
+    const pat = await register("Pat");
+    const sam = await register("Sam");
+    expect((await call(null, "GET", "/api/models")).status).toBe(401);
+    expect((await call(pat, "POST", "/api/models", { name: "Bad", members: [] })).status).toBe(400);
+    const created = await call(pat, "POST", "/api/models", sampleModel());
+    expect(created.status).toBe(200);
+    const list = await call(sam, "GET", "/api/models");
+    expect(list.json.models[0]).toMatchObject({ id: created.json.id, createdBy: "Pat", memberCount: sampleModel().members.length });
+    expect((await call(sam, "GET", `/api/models/${created.json.id}`)).json.model.members).toHaveLength(sampleModel().members.length);
+  });
+
+  it("crane positions are part of the revision fingerprint", async () => {
+    const pat = await register("Pat");
+    const plan = goodPlan();
+    plan.site.cranes = [{ id: "c1", name: "Crane 1", x: 0, z: 0, datasetId: null, boomLengthM: 18 }];
+    const r1 = (await call(pat, "POST", "/api/plans", { plan })).json.revision;
+    plan.site.cranes[0]!.x = 1;
+    const r2 = (await call(pat, "POST", `/api/plans/${r1.planId}/revisions`, { plan })).json.revision;
+    expect(r2.plan.site.cranes[0].x).toBe(1);
+    expect(r2.inputsHash).not.toBe(r1.inputsHash);
   });
 });

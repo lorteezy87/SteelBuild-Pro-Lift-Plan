@@ -80,6 +80,10 @@ describe("VT-01 / VT-02 / FT-01 chart lookup", () => {
     expect(lookupCapacity(ds, 18, 3.9)).toMatchObject({ ok: false, code: "OUTSIDE_COVERAGE" });
     expect(lookupCapacity(ds, 31, 10)).toMatchObject({ ok: false, code: "OUTSIDE_COVERAGE" });
   });
+  it("snaps to a tabulated value within a millimetre, and no further", () => {
+    expect(lookupCapacity(ds, 30.0003, 22)).toMatchObject({ ok: true, capacityKg: 3600, rule: "exact" });
+    expect(lookupCapacity(ds, 30.01, 22)).toMatchObject({ ok: false, code: "OUTSIDE_COVERAGE" });
+  });
   it("refuses a bracket that touches a blank cell", () => {
     expect(lookupCapacity(ds, 12, 12)).toMatchObject({ ok: false, code: "NOT_RATED" });
     expect(lookupCapacity(ds, 21, 4)).toMatchObject({ ok: false, code: "NOT_RATED" });
@@ -207,6 +211,12 @@ describe("plan evaluation", () => {
     expect(state(p, ds, "chart")).toBe("INVALID");
   });
 
+  it("a gross chart with nothing else on the hook needs review", () => {
+    const p = completePlan();
+    p.deductions = [];
+    expect(state(p, ds, "chart")).toBe("REVIEW_REQUIRED");
+  });
+
   it("a net chart does not take the deductions off twice", () => {
     const ev = evaluatePlan(completePlan(), { ...ds, convention: "net" });
     expect(ev.checks[0]!.metrics.find((m) => m.label === "Demand")?.value).toBeCloseTo(10_300, 6);
@@ -288,5 +298,85 @@ describe("FT-09 / FT-21 / FT-28 approval", () => {
     const newRev = await sha256Hex(fingerprintInput(completePlan(), { ...real, revision: "B" }, STANDARD_GRAVITY));
     expect(approvalStatus(approval, newRev)).toBe("invalidated");
     expect(approvalStatus(null, hash)).toBe("none");
+  });
+});
+
+import { bestCover, coverMember, maxRatedRadiusM, memberMass, sampleModel, unitMassKgPerM, type Member, type SiteCrane } from "./site";
+import { sanitizeModel, sanitizePlan } from "./validate";
+import { KG_PER_LB, M_PER_FT } from "./units";
+
+describe("steel model weights", () => {
+  const lbft = (size: string) => (unitMassKgPerM(size) ?? NaN) * (M_PER_FT / KG_PER_LB);
+  it("reads lb/ft from rolled designations", () => {
+    expect(lbft("W24X68")).toBeCloseTo(68, 6);
+    expect(lbft("W18X40 (upper, sloped)")).toBeCloseTo(40, 6);
+    expect(lbft("w10x33 (Phase 1)")).toBeCloseTo(33, 6);
+  });
+  it("computes HSS from wall geometry to within 1% of tabulated nominal weights", () => {
+    expect(lbft("HSS5X5X1/2")).toBeCloseTo(28.43, 0);
+    expect(Math.abs(lbft("HSS5X5X1/2") - 28.43) / 28.43).toBeLessThan(0.01);
+    expect(Math.abs(lbft("HSS8X8X1/4") - 25.82) / 25.82).toBeLessThan(0.01);
+    expect(Math.abs(lbft("HSS8X4X1/4") - 19.02) / 19.02).toBeLessThan(0.01);
+    expect(Math.abs(lbft("HSS4X4X1/4") - 12.21) / 12.21).toBeLessThan(0.015);
+  });
+  it("does not invent a weight for joists or unknown designations", () => {
+    expect(unitMassKgPerM("26K")).toBeNull();
+    expect(unitMassKgPerM("32LH")).toBeNull();
+    expect(unitMassKgPerM("")).toBeNull();
+  });
+});
+
+describe("crane coverage of a piece", () => {
+  const ds = syntheticDataset();
+  const beam = (x: number, size = "W24X68", lengthM = 9): Member => ({ id: "b", mark: "B1", type: "beam", size, a: [x, 5, -lengthM / 2], b: [x, 5, lengthM / 2], ref: "top", widthM: 0.2, depthM: 0.6, massKg: null, elevationNote: "", sheet: "" });
+  const crane: SiteCrane = { id: "c1", name: "Crane 1", x: 0, z: 0, datasetId: ds.id, boomLengthM: 18 };
+  const opts = { swingRadiusM: null, allowanceRel: 0.03, deductionsKg: 500, radiusAllowanceM: 0 };
+
+  it("rates a piece inside the chart and reports utilization", () => {
+    const c = coverMember(beam(8), crane, ds, opts);
+    const mass = memberMass(beam(8))!.massKg;
+    expect(c.status).toBe("ok");
+    expect(c.radiusM).toBeCloseTo(8, 9);
+    expect(c.capacityKg).toBe(18500);
+    expect(c.demandKg).toBeCloseTo(mass * 1.03 + 500, 6);
+  });
+  it("flags over capacity, outside the chart and blank cells", () => {
+    expect(coverMember({ ...beam(14), massKg: 9000 }, crane, ds, opts).status).toBe("over");
+    expect(coverMember(beam(40), crane, ds, opts).status).toBe("out");
+    expect(coverMember(beam(20), crane, ds, opts).status).toBe("unrated");
+  });
+  it("never treats an unknown weight or missing deductions as zero", () => {
+    expect(coverMember(beam(8, "26K"), crane, ds, opts).status).toBe("no-weight");
+    expect(coverMember(beam(8), crane, ds, { ...opts, deductionsKg: null }).status).toBe("no-weight");
+  });
+  it("without a chart can only say inside or outside the swing radius", () => {
+    const bare = { ...crane, datasetId: null };
+    expect(coverMember(beam(8), bare, null, { ...opts, swingRadiusM: 20 }).status).toBe("reach-only");
+    expect(coverMember(beam(8), bare, null, { ...opts, swingRadiusM: 5 }).status).toBe("out");
+    expect(coverMember(beam(8), crane, { ...ds, reviewState: "imported-unreviewed" }, { ...opts, swingRadiusM: 20 }).status).toBe("reach-only");
+  });
+  it("picks the rated crane with the lowest utilization, and finds the chart's far edge", () => {
+    const near = coverMember(beam(6), crane, ds, opts);
+    const far = coverMember(beam(10), crane, ds, opts);
+    expect(bestCover([far, near])).toBe(near);
+    expect(bestCover([coverMember(beam(40), crane, ds, opts), far])).toBe(far);
+    expect(maxRatedRadiusM(ds, 18)).toBe(14);
+    expect(maxRatedRadiusM(ds, 30)).toBe(22);
+    expect(maxRatedRadiusM(null, 18)).toBeNull();
+  });
+});
+
+describe("model and site sanitizers", () => {
+  it("accepts the sample model and rejects broken ones", () => {
+    const ok = sanitizeModel(JSON.parse(JSON.stringify(sampleModel())));
+    expect(ok.ok && ok.model.members.length).toBe(sampleModel().members.length);
+    expect(sanitizeModel({ members: [] }).ok).toBe(false);
+    expect(sanitizeModel({ members: [{ a: [0, 0, 0], b: [0, 0, 0] }] }).ok).toBe(false);
+    expect(sanitizeModel({ members: [{ a: [0, 0, "x"], b: [1, 0, 0] }] }).ok).toBe(false);
+  });
+  it("keeps crane positions and drops junk from a plan's site", () => {
+    const p = sanitizePlan({ site: { modelId: "abc", swingRadiusM: -3, cranes: [{ id: "c1", name: "NW", x: 6.5, z: -9, boomLengthM: "long", datasetId: 7 }] } });
+    expect(p.site).toEqual({ modelId: "abc", swingRadiusM: null, pickMemberId: null, pickCraneId: null, cranes: [{ id: "c1", name: "NW", x: 6.5, z: -9, boomLengthM: null, datasetId: null }] });
+    expect(sanitizePlan({}).site.cranes).toEqual([]);
   });
 });

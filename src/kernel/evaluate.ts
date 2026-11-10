@@ -10,9 +10,10 @@
  */
 import { type ChartDataset, lookupCapacity } from "./chart";
 import { averagePressure, boomGeometry, twoLegTensions } from "./mechanics";
+import { type PlanSite, emptySite } from "./site";
 import { type QuantityKind, STANDARD_GRAVITY } from "./units";
 
-export const KERNEL_VERSION = "0.1.0";
+export const KERNEL_VERSION = "0.3.0";
 
 export type ResultState = "WITHIN_LIMITS" | "REVIEW_REQUIRED" | "LIMIT_EXCEEDED" | "DRAFT" | "UNSUPPORTED" | "INVALID";
 
@@ -98,6 +99,8 @@ export interface LiftPlan {
     /** Project wind limit, if lower than the OEM limit. */
     projectWindLimitMs: number | null;
   };
+  /** Steel model, crane positions and which piece the check above was filled in from. */
+  site: PlanSite;
 }
 
 export interface Metric {
@@ -215,7 +218,13 @@ function chartCheck(plan: LiftPlan, dataset: ChartDataset | null, d: Demand): { 
   // A gross chart rates everything on the hook; a net chart already excludes the listed deductions.
   const demandKg = dataset!.convention === "gross" ? d.hookLoadKg : d.loadUpperKg;
   check.metrics.push({ label: "Load incl. allowance", value: d.loadUpperKg, kind: "mass" });
-  if (dataset!.convention === "gross") check.metrics.push({ label: "Deductions", value: d.ledger.totalKg, kind: "mass" });
+  if (dataset!.convention === "gross") {
+    check.metrics.push({ label: "Deductions", value: d.ledger.totalKg, kind: "mass" });
+    if (plan.deductions.length === 0) {
+      check.state = worstState([check.state, "REVIEW_REQUIRED"]);
+      check.notes.push("Nothing is listed on the hook besides the load. A gross chart also carries the hook block and rigging — add them.");
+    }
+  }
   else check.notes.push("Net chart: suspended items are not deducted again here. Confirm the chart's own deductions cover them.");
   check.metrics.push({ label: "Demand", value: demandKg, kind: "mass" });
   const utilization = demandKg / lookup.capacityKg;
@@ -406,5 +415,6 @@ export function emptyPlan(): LiftPlan {
     ground: { reactionN: null, reactionSource: "", matMassKg: null, matLengthM: null, matWidthM: null, fullAreaAttested: false, allowableBearingPa: null, allowableSource: "" },
     wind: { gustMs: null, source: "forecast" },
     thresholds: { reviewUtilization: null, minSlingAngleDeg: null, projectWindLimitMs: null },
+    site: emptySite(),
   };
 }

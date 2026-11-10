@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS datasets (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS models (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  member_count INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS plans (
   id TEXT PRIMARY KEY,
   created_by TEXT NOT NULL REFERENCES users(id),

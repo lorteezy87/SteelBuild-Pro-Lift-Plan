@@ -58,7 +58,8 @@ export type ChartLookup =
   | { ok: true; capacityKg: number; rule: "exact" | LookupRule; boomBracketM: [number, number]; radiusBracketM: [number, number] }
   | { ok: false; code: RefusalCode; message: string };
 
-const EPS = 1e-9;
+/** A value within 1 mm of a tabulated one is that tabulated value (unit conversion leaves hairs like 30.0003 m). */
+const EPS = 1e-3;
 
 function bracket(axis: number[], x: number): [number, number] | null {
   const first = axis[0];

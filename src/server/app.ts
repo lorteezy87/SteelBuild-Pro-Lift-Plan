@@ -13,7 +13,7 @@ import { canApprove, fingerprintInput, sha256Hex } from "../kernel/approval";
 import { type ChartDataset, canApproveDataset, syntheticDataset } from "../kernel/chart";
 import { evaluatePlan } from "../kernel/evaluate";
 import { STANDARD_GRAVITY } from "../kernel/units";
-import { type DatasetContent, sanitizeDatasetContent, sanitizePlan } from "../kernel/validate";
+import { type DatasetContent, sanitizeDatasetContent, sanitizeModel, sanitizePlan } from "../kernel/validate";
 import { type Db, audit, verifyAudit } from "./db";
 
 export interface AppOptions {
@@ -34,6 +34,7 @@ const SESSION_COOKIE = "sbplp_session";
 const SESSION_DAYS = 14;
 const MAX_LOGIN_FAILURES = 10;
 const LOCKOUT_MS = 15 * 60 * 1000;
+const MAX_MODEL_BYTES = 4_000_000;
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const now = () => new Date().toISOString();
@@ -280,6 +281,29 @@ export function createApp(db: Db, options: AppOptions) {
     db.prepare("UPDATE datasets SET reviewed_by = ?, reviewed_at = ? WHERE id = ? AND reviewed_by IS NULL").run(user.id, now(), row.id);
     audit(db, user.id, "dataset.approved", { id: row.id, contentHash: sha256(row.content) });
     return c.json({ dataset: toDataset(getDataset(row.id)!) });
+  });
+
+  // ── Steel models (insert-only: a corrected model is a new model) ────────
+  app.get("/api/models", (c) => {
+    const rows = db.prepare("SELECT m.id, m.name, m.member_count AS memberCount, m.created_at AS createdAt, u.name AS createdBy FROM models m JOIN users u ON u.id = m.created_by ORDER BY m.created_at DESC").all();
+    return c.json({ models: rows });
+  });
+
+  app.get("/api/models/:id", (c) => {
+    const row = db.prepare("SELECT id, content FROM models WHERE id = ?").get(c.req.param("id")) as { id: string; content: string } | undefined;
+    if (!row) return fail(c, 404, "NOT_FOUND", "Model not found.");
+    return c.json({ id: row.id, model: JSON.parse(row.content) });
+  });
+
+  app.post("/api/models", async (c) => {
+    const user = c.get("user");
+    if (Number(c.req.header("content-length") ?? 0) > MAX_MODEL_BYTES) return fail(c, 400, "VALIDATION_FAILED", "The model file is too large.");
+    const parsed = sanitizeModel(await body(c));
+    if (!parsed.ok) return fail(c, 400, "VALIDATION_FAILED", parsed.message);
+    const id = randomUUID();
+    db.prepare("INSERT INTO models (id, name, member_count, content, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, parsed.model.name, parsed.model.members.length, JSON.stringify(parsed.model), user.id, now());
+    audit(db, user.id, "model.imported", { id, name: parsed.model.name, members: parsed.model.members.length });
+    return c.json({ id, model: parsed.model });
   });
 
   // ── Plans and revisions ─────────────────────────────────────────────────

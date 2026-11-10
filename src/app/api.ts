@@ -1,5 +1,6 @@
 import type { ChartDataset } from "../kernel/chart";
 import type { Evaluation, LiftPlan, ResultState } from "../kernel/evaluate";
+import type { SiteModel } from "../kernel/site";
 import type { DatasetContent } from "../kernel/validate";
 
 export interface User {
@@ -54,6 +55,14 @@ export interface ChartRecord {
   importedById: string;
 }
 
+export interface ModelSummary {
+  id: string;
+  name: string;
+  memberCount: number;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface AuditEntry {
   seq: number;
   at: string;
@@ -106,6 +115,9 @@ export const api = {
   updateChart: (id: string, content: DatasetContent) => request<{ dataset: ChartDataset }>("PUT", `/api/datasets/${id}`, content),
   approveChart: (id: string) => request<{ dataset: ChartDataset }>("POST", `/api/datasets/${id}/approve`),
   loadSyntheticChart: () => request<{ dataset: ChartDataset }>("POST", "/api/datasets/synthetic"),
+  models: () => request<{ models: ModelSummary[] }>("GET", "/api/models"),
+  model: (id: string) => request<{ id: string; model: SiteModel }>("GET", `/api/models/${id}`),
+  createModel: (model: unknown) => request<{ id: string; model: SiteModel }>("POST", "/api/models", model),
   plans: () => request<{ plans: PlanSummary[] }>("GET", "/api/plans"),
   plan: (id: string) => request<{ latest: Revision; history: HistoryEntry[] }>("GET", `/api/plans/${id}`),
   saveRevision: (planId: string | null, plan: LiftPlan, datasetId: string | null) =>
